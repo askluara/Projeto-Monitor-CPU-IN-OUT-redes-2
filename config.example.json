@@ -1,0 +1,25 @@
+{
+  "snmp": {
+    "host": "192.168.56.10",
+    "port": 161,
+    "version": "2c",
+    "community": "public",
+    "v3": {
+      "user": "monitor",
+      "auth_protocol": "SHA",
+      "auth_key": "trocar-senha-auth",
+      "priv_protocol": "AES",
+      "priv_key": "trocar-senha-priv"
+    },
+    "timeout": 2,
+    "retries": 1
+  },
+  "interface": {
+    "index": 1
+  },
+  "oids": {
+    "cpu": "1.3.6.1.2.1.25.3.3.1.2.1"
+  },
+  "collect_interval_s": 5,
+  "max_plausible_bps": 10000000000
+}

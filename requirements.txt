@@ -1,0 +1,2 @@
+pysnmp>=7.1,<8
+# depois de instalar e validar, rode `pip freeze` e fixe as versoes exatas aqui

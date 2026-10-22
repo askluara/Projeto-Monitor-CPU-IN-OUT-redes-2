@@ -1,7 +1,7 @@
 """Persistencia em SQLite (arquivo unico, sem servidor).
 
 Tabelas:
-  samples(ts, in_bps, out_bps, cpu)       -> amostras coletadas
+  samples(ts, in_bps, out_bps, cpu, cpu_threshold) -> amostras e limite CPU vigente
   errors(ts, kind, message)               -> falhas de coleta
   alert_events(ts, metric, value, threshold, channels, message)
 
@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS samples (
     ts      REAL NOT NULL,
     in_bps  REAL,
     out_bps REAL,
-    cpu     REAL
+    cpu     REAL,
+    cpu_threshold REAL
 );
 CREATE INDEX IF NOT EXISTS idx_samples_ts ON samples(ts);
 
@@ -46,7 +47,7 @@ CREATE TABLE IF NOT EXISTS alert_events (
 CREATE INDEX IF NOT EXISTS idx_alerts_ts ON alert_events(ts);
 """
 
-Sample = Tuple[float, Optional[float], Optional[float], Optional[float]]
+Sample = Tuple[float, Optional[float], Optional[float], Optional[float], Optional[float]]
 
 
 class Storage:
@@ -55,15 +56,19 @@ class Storage:
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(SCHEMA)
+        sample_columns = {row[1] for row in self._conn.execute("PRAGMA table_info(samples)")}
+        if "cpu_threshold" not in sample_columns:
+            self._conn.execute("ALTER TABLE samples ADD COLUMN cpu_threshold REAL")
         self._conn.commit()
 
     # ---- escrita --------------------------------------------------
-    def add_sample(self, in_bps, out_bps, cpu, ts: Optional[float] = None) -> float:
+    def add_sample(self, in_bps, out_bps, cpu, ts: Optional[float] = None,
+                   cpu_threshold: Optional[float] = None) -> float:
         ts = time.time() if ts is None else ts
         with self._lock:
             self._conn.execute(
-                "INSERT INTO samples(ts, in_bps, out_bps, cpu) VALUES (?,?,?,?)",
-                (ts, in_bps, out_bps, cpu),
+                "INSERT INTO samples(ts, in_bps, out_bps, cpu, cpu_threshold) VALUES (?,?,?,?,?)",
+                (ts, in_bps, out_bps, cpu, cpu_threshold),
             )
             self._conn.commit()
         return ts
@@ -92,7 +97,7 @@ class Storage:
     def query_samples(self, start: Optional[float] = None,
                       end: Optional[float] = None) -> List[Sample]:
         """Amostras com start <= ts <= end (limites opcionais), ordem cronologica."""
-        sql, args = "SELECT ts, in_bps, out_bps, cpu FROM samples", []
+        sql, args = "SELECT ts, in_bps, out_bps, cpu, cpu_threshold FROM samples", []
         where = []
         if start is not None:
             where.append("ts >= ?")
@@ -112,11 +117,22 @@ class Storage:
                 "SELECT ts, kind, message FROM errors ORDER BY ts DESC LIMIT ?",
                 (limit,)).fetchall()
 
-    def query_alert_events(self, limit: int = 100):
+    def query_alert_events(self, limit: int = 100, start: Optional[float] = None,
+                           end: Optional[float] = None):
+        sql = "SELECT ts, metric, value, threshold, channels, message FROM alert_events"
+        where, args = [], []
+        if start is not None:
+            where.append("ts >= ?")
+            args.append(start)
+        if end is not None:
+            where.append("ts <= ?")
+            args.append(end)
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY ts DESC LIMIT ?"
+        args.append(limit)
         with self._lock:
-            return self._conn.execute(
-                "SELECT ts, metric, value, threshold, channels, message"
-                " FROM alert_events ORDER BY ts DESC LIMIT ?", (limit,)).fetchall()
+            return self._conn.execute(sql, args).fetchall()
 
     def count_samples(self) -> int:
         with self._lock:

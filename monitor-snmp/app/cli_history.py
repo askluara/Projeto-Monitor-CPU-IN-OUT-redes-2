@@ -30,7 +30,8 @@ def main():
     else:
         rows = db.query_samples()[-15:]
         print(f"Total no banco: {db.count_samples()} amostras (mostrando as ultimas 15)")
-    for ts, i, o, c in rows:
+    for row in rows:
+        ts, i, o, c = row[:4]
         when = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
         print(f"{when} | IN {fmt(i)} bps | OUT {fmt(o)} bps | CPU {fmt(c, '%')}")
     errs = db.query_errors(5)

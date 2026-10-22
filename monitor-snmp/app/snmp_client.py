@@ -4,6 +4,7 @@ Usa um event loop proprio e persistente, para ser chamado de uma thread
 de coleta sem conflitar com o loop da interface grafica.
 """
 import asyncio
+import threading
 
 from pysnmp.hlapi.v3arch.asyncio import (
     CommunityData, ContextData, ObjectIdentity, ObjectType, SnmpEngine,
@@ -46,6 +47,8 @@ class SnmpClient:
         self._loop = asyncio.new_event_loop()
         self._engine = SnmpEngine()
         self._target = None
+        self._lock = threading.Lock()
+        self._closed = False
 
     # ---- internos -------------------------------------------------
     def _auth_data(self):
@@ -77,13 +80,22 @@ class SnmpClient:
     # ---- API publica ----------------------------------------------
     def get(self, oids):
         """Retorna {oid: valor}. Lanca SnmpError (ou subclasse) em falha."""
+        if self._closed:
+            raise SnmpError("cliente SNMP já foi encerrado")
         try:
-            err_ind, err_stat, err_idx, var_binds = self._loop.run_until_complete(
-                asyncio.wait_for(self._get(oids), timeout=30)
-            )
+            with self._lock:
+                if self._closed:
+                    raise SnmpError("cliente SNMP já foi encerrado")
+                err_ind, err_stat, err_idx, var_binds = self._loop.run_until_complete(
+                    asyncio.wait_for(self._get(oids), timeout=30)
+                )
         except asyncio.TimeoutError as e:
             raise SnmpTimeout("tempo esgotado na consulta SNMP") from e
+        except asyncio.CancelledError as e:
+            raise SnmpTimeout("consulta SNMP cancelada antes de receber uma resposta") from e
         except Exception as e:  # erro de rede/transporte/config
+            if isinstance(e, SnmpError):
+                raise
             raise SnmpError(f"erro de transporte SNMP: {e}") from e
 
         if err_ind:
@@ -116,18 +128,21 @@ class SnmpClient:
         return str(self.get([oid])[oid])
 
     def close(self):
-        try:
-            pending = asyncio.all_tasks(self._loop)
-            for t in pending:
-                t.cancel()
-            if pending:
-                self._loop.run_until_complete(
-                    asyncio.gather(*pending, return_exceptions=True)
-                )
-        except Exception:
-            pass
-        finally:
+        # O loop é próprio deste cliente. A trava faz close aguardar uma
+        # consulta em andamento em vez de cancelá-la de outra thread.
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
             try:
-                self._loop.close()
+                pending = asyncio.all_tasks(self._loop)
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    self._loop.run_until_complete(
+                        asyncio.gather(*pending, return_exceptions=True)
+                    )
             except Exception:
                 pass
+            finally:
+                self._loop.close()

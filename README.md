@@ -52,7 +52,7 @@ Escolha **Pop-up**, **E-mail** ou **Ambos**. O limite de tráfego é aplicado se
 
 ## Testar com o roteador da aula
 
-Sim, o teste é direto se o roteador estiver configurado para permitir consultas SNMP do seu computador. Antes da aula, confirme com o docente/responsável que você pode consultar o equipamento e peça estes dados:
+O teste é direto se o roteador estiver configurado para permitir consultas SNMP do seu computador.  Para isso é preciso consultar o equipamento e para obter estes dados:
 
 1. Endereço IP de gerenciamento e porta SNMP (normalmente `161`/UDP).
 2. Versão habilitada (`v2c` ou `v3`); para v2c, a comunidade de leitura. Para v3, usuário e método/chaves de autenticação e privacidade.

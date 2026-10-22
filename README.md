@@ -105,6 +105,3 @@ py -m unittest discover -s monitor-snmp -v
 
 Os testes automatizados cobrem cálculo de taxas e wraps/reset, armazenamento/filtro/persistência e comportamento dos alertas. Para demonstrar a integração de ponta a ponta, configure um agente SNMP de laboratório, inicie a coleta, provoque tráfego/CPU, consulte um intervalo histórico, teste pausa/reset e use thresholds baixos. E-mail requer SMTP real e configurado.
 
-## Entrega e demonstração
-
-Inclua na entrega o endereço do repositório Git e capturas reais das abas Tempo real, Histórico e Configurações, além de um pop-up de alerta. As capturas dependem de uma sessão gráfica e de um equipamento SNMP configurado; não são simuladas neste repositório. A data e o formato da apresentação são definidos pelo docente.

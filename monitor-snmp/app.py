@@ -212,18 +212,29 @@ class MonitorApp(ctk.CTk):
         return list(y_values)
 
     @staticmethod
-    def _set_time_ticks(axes, rows, fmt):
+    def _set_time_ticks(axes, rows, fmt, x_bounds=None):
+        axes = tuple(axes)
         count = len(rows)
-        if not count:
+        if not axes:
             return
-        step = max(1, math.ceil(count / 8))
-        positions = list(range(0, count, step))
-        if positions[-1] != count - 1:
-            positions.append(count - 1)
-        labels = [datetime.fromtimestamp(rows[index][0]).strftime(fmt) for index in positions]
-        for ax in axes:
+        if x_bounds is not None:
+            start, end = x_bounds
+            positions = [start + (end - start) * i / 8 for i in range(9)]
+            labels = [datetime.fromtimestamp(value).strftime(fmt) for value in positions]
+        else:
+            if not count:
+                return
+            step = max(1, math.ceil(count / 8))
+            positions = list(range(0, count, step))
+            if positions[-1] != count - 1:
+                positions.append(count - 1)
+            labels = [datetime.fromtimestamp(rows[index][0]).strftime(fmt) for index in positions]
+        for index, ax in enumerate(axes):
             ax.set_xticks(positions)
-            ax.set_xticklabels(labels, rotation=15, ha="right")
+            if index == len(axes) - 1:
+                ax.set_xticklabels(labels, rotation=0, ha="center", fontsize=8)
+            else:
+                ax.tick_params(axis="x", labelbottom=False)
 
     @staticmethod
     def _render_synced_readout(fig, index, pinned=False):
@@ -247,17 +258,18 @@ class MonitorApp(ctk.CTk):
         fig = event.canvas.figure
         rows = getattr(fig, "_sync_rows", ())
         axes = getattr(fig, "_sync_axes", ())
-        if not rows or event.inaxes not in axes:
+        x_values = getattr(fig, "_sync_x_values", ())
+        if not rows or event.inaxes not in axes or not x_values:
             return False
-        index = int(round(event.xdata))
-        if index < 0 or index >= len(rows) or abs(event.xdata - index) > .5:
-            return False
+        index = min(range(len(x_values)), key=lambda i: abs(x_values[i] - event.xdata))
         value_column = {axes[0]: 1, axes[1]: 2, axes[2]: 3}.get(event.inaxes)
         point_value = rows[index][value_column] if value_column is not None else None
-        if point_value is None or event.y is None:
+        if point_value is None or event.x is None or event.y is None:
             return False
-        point_y = event.inaxes.transData.transform((index, float(point_value)))[1]
-        if abs(point_y - event.y) > 24:
+        point_x, point_y = event.inaxes.transData.transform(
+            (x_values[index], float(point_value))
+        )
+        if abs(point_x - event.x) > 20 or abs(point_y - event.y) > 24:
             return False
         if pinned and getattr(fig, "_sync_pinned_index", None) == index:
             fig._sync_pinned_index = None
@@ -269,7 +281,7 @@ class MonitorApp(ctk.CTk):
             fig._sync_pinned_index = index
         self._render_synced_readout(fig, index, pinned=pinned)
         for cursor in fig._sync_cursors:
-            cursor.set_xdata([index, index])
+            cursor.set_xdata([x_values[index], x_values[index]])
             cursor.set_visible(True)
         return True
 
@@ -305,13 +317,15 @@ class MonitorApp(ctk.CTk):
         self._select_synced_point(event, pinned=True)
 
     @staticmethod
-    def _reset_sync_cursors(fig, axes, rows, readout):
+    def _reset_sync_cursors(fig, axes, rows, readout, x_values=None):
         fig._sync_axes = tuple(axes)
         fig._sync_rows = list(rows)
+        fig._sync_x_values = list(x_values) if x_values is not None else list(range(len(rows)))
         fig._sync_readout = readout
         fig._sync_pinned_index = None
         fig._sync_cursors = [
-            ax.axvline(0, color="#e2e8f0", linestyle=":", linewidth=1, alpha=.7,
+            ax.axvline(fig._sync_x_values[0] if fig._sync_x_values else 0,
+                       color="#e2e8f0", linestyle=":", linewidth=1, alpha=.7,
                        zorder=8, visible=False)
             for ax in axes
         ]
@@ -380,12 +394,16 @@ class MonitorApp(ctk.CTk):
     def _build_history(self):
         bar = ctk.CTkFrame(self.history_tab, fg_color="#111c2e", corner_radius=12)
         bar.pack(fill="x", padx=14, pady=14)
-        ctk.CTkLabel(bar, text="Início (AAAA-MM-DD HH:MM:SS)").grid(row=0, column=0, padx=10, pady=(10, 2), sticky="w")
-        ctk.CTkLabel(bar, text="Fim (AAAA-MM-DD HH:MM:SS)").grid(row=0, column=1, padx=10, pady=(10, 2), sticky="w")
-        self.start_date = ctk.CTkEntry(bar, placeholder_text="2026-10-22 00:00:00", width=220)
-        self.end_date = ctk.CTkEntry(bar, placeholder_text="2026-10-22 23:59:59", width=220)
+        ctk.CTkLabel(bar, text="Início").grid(row=0, column=0, padx=10, pady=(10, 2), sticky="w")
+        ctk.CTkLabel(bar, text="Fim").grid(row=0, column=1, padx=10, pady=(10, 2), sticky="w")
+        self.start_date = ctk.CTkEntry(bar, placeholder_text="00/00/0000 00:00:00", width=220)
+        self.end_date = ctk.CTkEntry(bar, placeholder_text="00/00/0000 00:00:00", width=220)
         self.start_date.grid(row=1, column=0, padx=10, pady=(2, 12), sticky="ew")
         self.end_date.grid(row=1, column=1, padx=10, pady=(2, 12), sticky="ew")
+        for entry in (self.start_date, self.end_date):
+            entry.bind("<KeyRelease>", self._format_datetime_entry)
+            entry.bind("<KeyPress-BackSpace>", self._backspace_datetime_digit)
+            entry.bind("<FocusOut>", self._format_datetime_entry)
         self.history_period = ctk.CTkOptionMenu(
             bar, values=["Personalizado", *HISTORY_PERIODS.keys()]
         )
@@ -395,11 +413,11 @@ class MonitorApp(ctk.CTk):
         self.history_range = ctk.CTkLabel(self.history_tab, text="Selecione o período para consultar as amostras.", text_color="#94a3b8")
         self.history_range.pack(anchor="w", padx=20)
         self.hist_fig = plt.figure(figsize=(10, 7), facecolor="#0b1220")
-        hist_grid = self.hist_fig.add_gridspec(3, 1, height_ratios=(1, 1, 1), hspace=.42)
+        hist_grid = self.hist_fig.add_gridspec(3, 1, height_ratios=(1, 1, 1), hspace=.52)
         self.hist_in = self.hist_fig.add_subplot(hist_grid[0, 0])
         self.hist_out = self.hist_fig.add_subplot(hist_grid[1, 0])
         self.hist_cpu = self.hist_fig.add_subplot(hist_grid[2, 0])
-        self.hist_fig.subplots_adjust(left=.085, right=.985, top=.88, bottom=.11)
+        self.hist_fig.subplots_adjust(left=.085, right=.985, top=.88, bottom=.13)
         self.hist_readout = self.hist_fig.text(
             .5, .965, "Passe o mouse sobre um ponto ou clique para fixar a leitura conjunta",
             ha="center", va="center", color="#cbd5e1", fontsize=10,
@@ -758,23 +776,98 @@ class MonitorApp(ctk.CTk):
         self.stop_btn.configure(state="disabled")
         self.status.configure(text="● Desconectado", text_color="#94a3b8")
 
+    @staticmethod
+    def _datetime_mask(digits):
+        digits = digits[:14]
+        parts = (2, 2, 4, 2, 2, 2)
+        separators = ("/", "/", " ", ":", ":")
+        result = []
+        offset = 0
+        for index, size in enumerate(parts):
+            part = digits[offset:offset + size]
+            result.append(part)
+            offset += len(part)
+            if len(part) == size and index < len(separators):
+                result.append(separators[index])
+            if len(part) < size:
+                break
+        return "".join(result)
+
+    @staticmethod
+    def _datetime_cursor_position(masked, digit_count):
+        if digit_count <= 0:
+            return 0
+        position = 0
+        seen = 0
+        while position < len(masked) and seen < digit_count:
+            if masked[position].isdigit():
+                seen += 1
+            position += 1
+        if digit_count in (2, 4, 8, 10, 12) and position < len(masked):
+            position += 1
+        return position
+
+    def _format_datetime_entry(self, event):
+        entry = event.widget
+        current = entry.get()
+        digits = "".join(char for char in current if char in "0123456789")
+        masked = self._datetime_mask(digits)
+        if current == masked:
+            return
+        cursor = int(entry.index("insert"))
+        digit_count = sum(char in "0123456789" for char in current[:cursor])
+        entry.delete(0, "end")
+        entry.insert(0, masked)
+        entry.icursor(self._datetime_cursor_position(masked, digit_count))
+
+    def _backspace_datetime_digit(self, event):
+        entry = event.widget
+        current = entry.get()
+        digit_positions = [i for i, char in enumerate(current) if char in "0123456789"]
+        if entry.selection_present():
+            start, end = int(entry.index("sel.first")), int(entry.index("sel.last"))
+            selected = [i for i, position in enumerate(digit_positions) if start <= position < end]
+            if not selected:
+                return "break"
+            first, last = selected[0], selected[-1] + 1
+            digits = "".join(char for char in current if char in "0123456789")
+            digits = digits[:first] + digits[last:]
+            cursor_digits = first
+        else:
+            cursor = int(entry.index("insert"))
+            digits_before = sum(position < cursor for position in digit_positions)
+            if digits_before == 0:
+                return "break"
+            digits = "".join(char for char in current if char in "0123456789")
+            digits = digits[:digits_before - 1] + digits[digits_before:]
+            cursor_digits = digits_before - 1
+        masked = self._datetime_mask(digits)
+        entry.delete(0, "end")
+        entry.insert(0, masked)
+        entry.icursor(self._datetime_cursor_position(masked, cursor_digits))
+        return "break"
+
     def load_history(self):
         try:
             period = self.history_period.get()
             if period != "Personalizado":
                 start, end = period_bounds(period)
                 self.start_date.delete(0, "end")
-                self.start_date.insert(0, datetime.fromtimestamp(start).strftime("%Y-%m-%d %H:%M:%S"))
+                self.start_date.insert(0, datetime.fromtimestamp(start).strftime("%d/%m/%Y %H:%M:%S"))
                 self.end_date.delete(0, "end")
-                self.end_date.insert(0, datetime.fromtimestamp(end).strftime("%Y-%m-%d %H:%M:%S"))
+                self.end_date.insert(0, datetime.fromtimestamp(end).strftime("%d/%m/%Y %H:%M:%S"))
             else:
-                start = datetime.strptime(self.start_date.get().strip(), "%Y-%m-%d %H:%M:%S").timestamp()
-                end = datetime.strptime(self.end_date.get().strip(), "%Y-%m-%d %H:%M:%S").timestamp()
+                start = datetime.strptime(self.start_date.get().strip(), "%d/%m/%Y %H:%M:%S").timestamp()
+                end = datetime.strptime(self.end_date.get().strip(), "%d/%m/%Y %H:%M:%S").timestamp()
             if start > end:
                 raise ValueError("O início do período deve preceder o fim.")
             rows = self.db.query_samples(start, end)
             alerts = self.db.query_alert_events(start=start, end=end, limit=1000)
             self.history_range.configure(text=f"Período: {datetime.fromtimestamp(start):%d/%m/%Y %H:%M:%S} até {datetime.fromtimestamp(end):%d/%m/%Y %H:%M:%S} · {len(rows)} amostras · {len(alerts)} alertas registrados")
+            plot_start, plot_end = start, end
+            if plot_end <= plot_start:
+                plot_start -= .5
+                plot_end += .5
             for ax in (self.hist_in, self.hist_out, self.hist_cpu):
                 ax.clear()
             self._style_axes((self.hist_in, self.hist_out, self.hist_cpu))
@@ -786,8 +879,8 @@ class MonitorApp(ctk.CTk):
             self.hist_cpu.set_ylabel("%", color="#94a3b8")
             axes = {"in": self.hist_in, "out": self.hist_out, "cpu": self.hist_cpu}
             colors = {"in": "#34d399", "out": "#60a5fa", "cpu": "#fbbf24"}
+            x_values = [r[0] for r in rows]
             if rows:
-                x = list(range(len(rows)))
                 cpu_thresholds = [
                     float(r[4]) if len(r) > 4 and r[4] is not None else None
                     for r in rows
@@ -796,7 +889,7 @@ class MonitorApp(ctk.CTk):
                                                 (self.hist_out, 2, "OUT", colors["out"]),
                                                 (self.hist_cpu, 3, "CPU", colors["cpu"])):
                     values = self._plot_series(
-                        axis, x, [r[col] for r in rows], label, color,
+                        axis, x_values, [r[col] for r in rows], label, color,
                         "%" if col == 3 else "bps",
                         alert_thresholds=cpu_thresholds if col == 3 else None,
                     )
@@ -804,14 +897,14 @@ class MonitorApp(ctk.CTk):
                         handles, labels = axis.get_legend_handles_labels()
                         unique = dict(zip(labels, handles))
                         axis.legend(unique.values(), unique.keys(), facecolor="#111c2e",
-                                    labelcolor="#e2e8f0", frameon=False)
+                                    labelcolor="#e2e8f0", frameon=False,
+                                    loc="upper left" if col == 3 else "upper right",
+                                    ncol=3 if col == 3 else 1,
+                                    fontsize=7 if col == 3 else 9)
                     if col == 3 and values:
                         self._set_cpu_scale(axis, values)
-                self._set_time_ticks((self.hist_in, self.hist_out, self.hist_cpu), rows,
-                                     "%d/%m %H:%M:%S")
             else:
                 for axis in (self.hist_in, self.hist_out, self.hist_cpu):
-                    axis.set_xticks([])
                     axis.set_yticks([])
                     axis.text(.5, .5, "Nenhuma amostra neste período", transform=axis.transAxes,
                               ha="center", va="center", color="#64748b", fontsize=11)
@@ -820,10 +913,9 @@ class MonitorApp(ctk.CTk):
             for ts, metric, value, threshold, _channels, _message in alerts:
                 axis = axes.get(metric.lower())
                 if axis and rows:
-                    alert_index = min(range(len(rows)), key=lambda i: abs(rows[i][0] - ts))
                     label = "Alerta registrado" if metric not in alert_legend_added else "_nolegend_"
                     alert_legend_added.add(metric)
-                    axis.scatter([alert_index], [value], color="#fb7185", edgecolors="white", linewidths=.7,
+                    axis.scatter([ts], [value], color="#fb7185", edgecolors="white", linewidths=.7,
                                  s=55, zorder=5, label=label)
                     threshold_key = (metric, threshold)
                     if threshold_key not in threshold_lines_added:
@@ -832,13 +924,23 @@ class MonitorApp(ctk.CTk):
                     handles, labels = axis.get_legend_handles_labels()
                     unique = dict(zip(labels, handles))
                     axis.legend(unique.values(), unique.keys(), facecolor="#111c2e",
-                                labelcolor="#e2e8f0", frameon=False)
+                                labelcolor="#e2e8f0", frameon=False,
+                                loc="upper left" if axis is self.hist_cpu else "upper right",
+                                ncol=3 if axis is self.hist_cpu else 1,
+                                fontsize=7 if axis is self.hist_cpu else 9)
+            for axis in (self.hist_in, self.hist_out, self.hist_cpu):
+                axis.set_xlim(plot_start, plot_end)
+            self._set_time_ticks(
+                (self.hist_in, self.hist_out, self.hist_cpu), rows,
+                "%d/%m %H:%M", x_bounds=(plot_start, plot_end)
+            )
             self._reset_sync_cursors(
-                self.hist_fig, (self.hist_in, self.hist_out, self.hist_cpu), rows, self.hist_readout
+                self.hist_fig, (self.hist_in, self.hist_out, self.hist_cpu),
+                rows, self.hist_readout, x_values=x_values
             )
             self.hist_canvas.draw_idle()
         except ValueError as exc:
-            messagebox.showerror("Período inválido", f"Use AAAA-MM-DD HH:MM:SS. {exc}")
+            messagebox.showerror("Período inválido", f"Use DD/MM/AAAA HH:MM:SS. {exc}")
     def _close(self):
         if self._closing:
             return
